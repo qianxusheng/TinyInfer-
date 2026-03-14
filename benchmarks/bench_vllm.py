@@ -1,116 +1,71 @@
 """
-vLLM baseline benchmark - 用于建立性能基准
-测试指标: latency, throughput, GPU memory usage
+vLLM benchmark - 用 vLLM 的离线推理
+vLLM 内部自动做 continuous batching + PagedAttention
+同样的 prompts，一次性丢给 vLLM 批量处理
 """
 import time
-import asyncio
-import aiohttp
-from typing import List, Dict
-import numpy as np
+import os
+from vllm import LLM, SamplingParams
+
+MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "Qwen2.5-1.5B-Instruct")
+
+# 和 naive 完全一样的 prompts
+PROMPTS = [
+    "What is machine learning?",
+    "Explain the transformer architecture.",
+    "Write a Python function to sort a list.",
+    "What is the difference between CPU and GPU?",
+    "How does backpropagation work?",
+    "Explain attention mechanism in one paragraph.",
+    "What is a neural network?",
+    "Describe gradient descent briefly.",
+]
 
 
-class vLLMBenchmark:
-    def __init__(self, api_url: str = "http://localhost:8000/generate"):
-        self.api_url = api_url
+def main():
+    print("=" * 50)
+    print("vLLM Inference (continuous batching + PagedAttention)")
+    print("=" * 50)
 
-    async def single_request(self, session: aiohttp.ClientSession, prompt: str, max_tokens: int = 100) -> Dict:
-        """发送单个推理请求"""
-        start_time = time.time()
+    # 加载模型
+    print("\nLoading model...")
+    t0 = time.time()
+    llm = LLM(model=MODEL_PATH, dtype="float16", gpu_memory_utilization=0.8)
+    print(f"Model loaded in {time.time() - t0:.2f}s")
 
-        payload = {
-            "prompt": prompt,
-            "max_tokens": max_tokens,
-            "temperature": 0.7
-        }
+    sampling_params = SamplingParams(
+        temperature=0.7,
+        max_tokens=100,
+    )
 
-        try:
-            async with session.post(self.api_url, json=payload) as response:
-                result = await response.json()
-                latency = time.time() - start_time
-                return {
-                    "latency": latency,
-                    "success": True,
-                    "output_length": len(result.get("text", "").split())
-                }
-        except Exception as e:
-            return {
-                "latency": time.time() - start_time,
-                "success": False,
-                "error": str(e)
-            }
+    # vLLM 批量推理 - 内部自动做 continuous batching
+    print(f"\nRunning {len(PROMPTS)} prompts, max_tokens={sampling_params.max_tokens}")
+    print("-" * 50)
 
-    async def concurrent_benchmark(self, prompts: List[str], concurrency: int = 10, max_tokens: int = 100):
-        """并发压测"""
-        print(f"Running benchmark with {len(prompts)} requests, concurrency={concurrency}")
+    total_start = time.time()
+    outputs = llm.generate(PROMPTS, sampling_params)
+    total_time = time.time() - total_start
 
-        async with aiohttp.ClientSession() as session:
-            start_time = time.time()
+    # 打印每条结果
+    total_tokens = 0
+    for i, output in enumerate(outputs):
+        text = output.outputs[0].text
+        output_len = len(output.outputs[0].token_ids)
+        total_tokens += output_len
+        print(f"[{i+1}/{len(PROMPTS)}] {output_len} tokens | {output.prompt[:40]}...")
+        print(f"  -> {text[:80]}...")
+        print()
 
-            # 批量发送请求
-            tasks = [self.single_request(session, prompt, max_tokens) for prompt in prompts]
-            results = await asyncio.gather(*tasks)
-
-            total_time = time.time() - start_time
-
-            # 统计结果
-            successful = [r for r in results if r["success"]]
-            latencies = [r["latency"] for r in successful]
-
-            stats = {
-                "total_requests": len(prompts),
-                "successful_requests": len(successful),
-                "failed_requests": len(prompts) - len(successful),
-                "total_time": total_time,
-                "throughput": len(successful) / total_time,  # requests/sec
-                "avg_latency": np.mean(latencies) if latencies else 0,
-                "p50_latency": np.percentile(latencies, 50) if latencies else 0,
-                "p95_latency": np.percentile(latencies, 95) if latencies else 0,
-                "p99_latency": np.percentile(latencies, 99) if latencies else 0,
-            }
-
-            return stats, results
-
-    def print_stats(self, stats: Dict):
-        """打印benchmark结果"""
-        print("\n" + "="*50)
-        print("vLLM Baseline Benchmark Results")
-        print("="*50)
-        print(f"Total requests:      {stats['total_requests']}")
-        print(f"Successful:          {stats['successful_requests']}")
-        print(f"Failed:              {stats['failed_requests']}")
-        print(f"Total time:          {stats['total_time']:.2f}s")
-        print(f"Throughput:          {stats['throughput']:.2f} req/s")
-        print(f"Avg latency:         {stats['avg_latency']*1000:.2f}ms")
-        print(f"P50 latency:         {stats['p50_latency']*1000:.2f}ms")
-        print(f"P95 latency:         {stats['p95_latency']*1000:.2f}ms")
-        print(f"P99 latency:         {stats['p99_latency']*1000:.2f}ms")
-        print("="*50 + "\n")
-
-
-async def main():
-    # 测试数据 - 不同长度的prompts
-    test_prompts = [
-        "What is machine learning?",
-        "Explain the transformer architecture in detail.",
-        "Write a Python function to implement binary search.",
-        "What are the key differences between PyTorch and TensorFlow?",
-    ] * 25  # 100个请求
-
-    benchmark = vLLMBenchmark()
-
-    # 测试不同并发度
-    for concurrency in [1, 5, 10, 20]:
-        print(f"\nTesting with concurrency={concurrency}")
-        stats, _ = await benchmark.concurrent_benchmark(
-            test_prompts[:20],  # 先用20个请求测试
-            concurrency=concurrency,
-            max_tokens=50
-        )
-        benchmark.print_stats(stats)
-        await asyncio.sleep(2)  # 间隔2秒避免过载
+    # 统计
+    print("=" * 50)
+    print("Results")
+    print("=" * 50)
+    print(f"Total time:          {total_time:.2f}s")
+    print(f"Total tokens:        {total_tokens}")
+    print(f"Throughput:          {total_tokens / total_time:.2f} tokens/s")
+    print(f"Avg time/request:    {total_time / len(PROMPTS):.2f}s")
+    print("=" * 50)
 
 
 if __name__ == "__main__":
-    print("Starting vLLM baseline benchmark...")
-    print("Make sure vLLM server is running: vllm serve <model_name>")
-    asyncio.run(main())
+    main()
