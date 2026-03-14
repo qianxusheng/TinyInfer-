@@ -4,9 +4,9 @@ from typing import Dict, List, Optional
 
 import torch
 
-from .model_loader import load_model, load_tokenizer
-from .request import Request, RequestStatus
-from .sampler import sample_next_token
+from .core.model_loader import load_model, load_tokenizer
+from .core.request import Request, RequestStatus
+from .core.sampler import sample_next_token
 from .scheduler import ContinuousBatchScheduler
 
 

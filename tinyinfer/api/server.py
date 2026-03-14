@@ -3,7 +3,7 @@ import asyncio
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-from ..config import MODEL_PATH
+from ..core.config import MODEL_PATH
 from ..engine import TinyInferEngine, SamplingParams
 
 # request/response schemas

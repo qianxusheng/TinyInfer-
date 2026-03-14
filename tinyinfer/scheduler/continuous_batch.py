@@ -1,6 +1,6 @@
 from collections import deque
 from typing import Deque, List, Optional
-from ..request import Request, RequestStatus
+from ..core.request import Request, RequestStatus
 
 
 class ContinuousBatchScheduler:
